@@ -9,6 +9,16 @@ const MAX_CHAT_ID = process.env.MAX_CHAT_ID || '-76883267657110';
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Форма на сайте ходит на этот контейнер cross-origin (Content-Type: application/json
+// и Authorization → браузер делает preflight OPTIONS): без этих заголовков запрос падает.
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // Container Apps опрашивает /health, чтобы понять, что ревизия жива
 app.get(['/health', '/ready', '/ping'], (req, res) => {
   res.json({ status: 'ok' });
@@ -18,14 +28,17 @@ app.get('/', (req, res) => {
   res.type('text/plain').send('phone-api is running');
 });
 
-// Получаем телефон из тела запроса и отправляем его в MAX
+// Получаем телефон и страницу, с которой пришла заявка, и отправляем их в MAX
 app.post('/phone-form', async (req, res) => {
-  const phone = String((req.body && req.body.phone) ?? req.query.phone ?? '').trim();
+  const phone = String(req.body?.phone ?? '').trim();
+  const url = String(req.body?.url ?? '').trim();
 
-  if (!phone) {
-    console.log(`phone-form: phone is empty, body=${JSON.stringify(req.body)}`);
-    return res.status(400).json({ status: 'error', error: 'phone required' });
+  if (!phone || !url) {
+    console.log(`phone-form: phone and url are required, body=${JSON.stringify(req.body)}`);
+    return res.status(400).json({ status: 'error', error: 'phone and url required' });
   }
+
+  const text = `📞 Новая заявка с сайта\n\nТелефон: ${phone}\nСтраница: ${url}`;
 
   try {
     const response = await fetch(
@@ -36,7 +49,7 @@ app.post('/phone-form', async (req, res) => {
           'Content-Type': 'application/json',
           Authorization: MAX_API_TOKEN,
         },
-        body: JSON.stringify({ text: phone }),
+        body: JSON.stringify({ text }),
       }
     );
 
@@ -47,8 +60,8 @@ app.post('/phone-form', async (req, res) => {
       return res.status(502).json({ status: 'error', result });
     }
 
-    console.log(`phone-form: ${phone} sent to chat ${MAX_CHAT_ID}`);
-    res.json({ status: 'success', result });
+    console.log(`phone-form: ${phone} (${url}) sent to chat ${MAX_CHAT_ID}`);
+    res.json({ status: 'success' });
   } catch (err) {
     // fetch прячет настоящую причину (TLS/DNS/connect) в err.cause
     const cause = (err.cause && (err.cause.message || err.cause.code)) || '';
